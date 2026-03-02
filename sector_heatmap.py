@@ -7,7 +7,6 @@ import pytz
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# NSE Sector Indices
 SECTORS = {
     "Metal": "^CNXMETAL",
     "IT": "^CNXIT",
@@ -22,14 +21,15 @@ SECTORS = {
     "Media": "^CNXMEDIA"
 }
 
+DEFENSIVE = ["FMCG", "Pharma", "IT"]
+CYCLICAL = ["Metal", "Infra", "Realty", "Auto", "Energy", "Bank", "PSU Bank"]
 
 def send_message(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
     requests.post(url, data=payload)
 
-
-def get_sector_change(symbol):
+def get_change(symbol):
     ticker = yf.Ticker(symbol)
     hist = ticker.history(period="2d")
 
@@ -39,56 +39,82 @@ def get_sector_change(symbol):
     current = hist["Close"].iloc[-1]
     previous = hist["Close"].iloc[-2]
 
-    change_percent = ((current - previous) / previous) * 100
-    return round(change_percent, 2)
+    return round(((current - previous) / previous) * 100, 2)
 
+def heat_emoji(change):
+    if change > 1.5:
+        return "🟢🟢"
+    elif change > 0:
+        return "🟢"
+    elif change > -1.5:
+        return "🔴"
+    else:
+        return "🔴🔴"
 
 if __name__ == "__main__":
 
     ist = pytz.timezone("Asia/Kolkata")
     time_now = datetime.now(ist).strftime("%d %b %Y  %I:%M %p IST")
 
-    sector_changes = {}
+    sector_data = {}
 
     for name, symbol in SECTORS.items():
-        change = get_sector_change(symbol)
+        change = get_change(symbol)
         if change is not None:
-            sector_changes[name] = change
+            sector_data[name] = change
 
-    if not sector_changes:
-        send_message("Sector data not available.")
+    if not sector_data:
+        send_message("Sector data unavailable.")
         exit()
 
-    green = sum(1 for v in sector_changes.values() if v > 0)
-    red = sum(1 for v in sector_changes.values() if v <= 0)
+    green = sum(1 for v in sector_data.values() if v > 0)
+    red = sum(1 for v in sector_data.values() if v <= 0)
 
-    circles = "🟢 " * green + "🔴 " * red
+    breadth = round((green / len(sector_data)) * 100, 1)
 
-    # Find leading & weakest
-    leader = max(sector_changes, key=sector_changes.get)
-    weakest = min(sector_changes, key=sector_changes.get)
+    leader = max(sector_data, key=sector_data.get)
+    weakest = min(sector_data, key=sector_data.get)
+
+    # Risk Logic
+    if red >= 9:
+        risk = "HIGH 🔥"
+    elif red >= 6:
+        risk = "MODERATE ⚠️"
+    else:
+        risk = "LOW 🟢"
+
+    # Defensive vs Cyclical
+    defensive_avg = sum(sector_data[s] for s in DEFENSIVE if s in sector_data) / len(DEFENSIVE)
+    cyclical_avg = sum(sector_data[s] for s in CYCLICAL if s in sector_data) / len(CYCLICAL)
+
+    if defensive_avg > cyclical_avg:
+        rotation = "Money moving to DEFENSIVE sectors 🛡️"
+    else:
+        rotation = "Money rotating to CYCLICAL sectors 🚀"
 
     message = f"""📊 Sector Heatmap
 📅 {time_now}
 
-{circles}
-{green} Green  {red} Red  ({len(sector_changes)} sectors)
+Breadth: {green} Green | {red} Red ({breadth}% positive)
+Risk Level: {risk}
 
 Sector        Chg%
 ------------------------"""
 
-    for sector, change in sector_changes.items():
-        arrow = "▲" if change > 0 else "▼"
-        message += f"\n{sector:<12} {arrow} {change}%"
+    for sector, change in sector_data.items():
+        message += f"\n{heat_emoji(change)} {sector:<10} {change}%"
 
     message += f"""
 
-📌 Rotation Signal
-📉 Broad selloff — {red}/{len(sector_changes)} sectors declining
-🔥 {leader} leading {sector_changes[leader]}%
-❄️ {weakest} weakest {sector_changes[weakest]}%
+📌 Rotation Insight
+🔥 Leader: {leader} ({sector_data[leader]}%)
+❄️ Weakest: {weakest} ({sector_data[weakest]}%)
 
-🤖 Every 5 min | NSE via Yahoo Finance
+{rotation}
 """
+
+    # Extreme Alert
+    if red >= 10:
+        message += "\n🚨 ALERT: Broad Market Selloff!"
 
     send_message(message)
