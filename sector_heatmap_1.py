@@ -17,7 +17,8 @@ SECTORS = {
     "Energy": "^CNXENERGY",
     "PSU Bank": "^CNXPSUBANK",
     "Auto": "^CNXAUTO",
-    "Media": "^CNXMEDIA"
+    "Media": "NIFTY_MEDIA.NS"
+   
 }
 
 def send_message(message):
@@ -30,55 +31,33 @@ def get_all_changes(symbols):
             tickers=" ".join(symbols),
             period="2d",
             group_by="ticker",
-            threads=False
+            threads=False,
+            progress=False
         )
 
         results = {}
+
         for symbol in symbols:
             try:
+                if symbol not in data:
+                    results[symbol] = None
+                    continue
+
                 hist = data[symbol]
+
+                if len(hist) < 2:
+                    results[symbol] = None
+                    continue
+
                 current = hist["Close"].iloc[-1]
                 previous = hist["Close"].iloc[-2]
                 change = ((current - previous) / previous) * 100
                 results[symbol] = round(change, 2)
-            except:
+
+            except Exception:
                 results[symbol] = None
 
         return results
 
     except Exception:
         return None
-
-if __name__ == "__main__":
-
-    now = datetime.now().strftime("%d %b %Y %I:%M %p IST")
-
-    symbols = list(SECTORS.values())
-    changes = get_all_changes(symbols)
-
-    if not changes:
-        send_message("⚠️ Yahoo rate limited. Try later.")
-        exit()
-
-    green = 0
-    red = 0
-
-    message = f"📊 Sector Heatmap\n🕒 {now}\n\n"
-
-    for name, symbol in SECTORS.items():
-        change = changes.get(symbol)
-        if change is None:
-            continue
-
-        if change >= 0:
-            green += 1
-            indicator = "🟢"
-        else:
-            red += 1
-            indicator = "🔴"
-
-        message += f"{indicator} {name}: {change}%\n"
-
-    message += f"\n🟢 {green} | 🔴 {red}"
-
-    send_message(message)
