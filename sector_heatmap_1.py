@@ -1,13 +1,15 @@
 import requests
 import yfinance as yf
 import os
-from flask import Flask
-
-app = Flask(__name__)
+import time
+from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# -----------------------------
+# Sector Mapping
+# -----------------------------
 SECTORS = {
     "Metal": "^CNXMETAL",
     "IT": "^CNXIT",
@@ -22,38 +24,96 @@ SECTORS = {
     "Media": "^CNXMEDIA"
 }
 
+
+# -----------------------------
+# Telegram Sender
+# -----------------------------
 def send_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": message}
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print("Telegram Error:", e)
 
-def run_bot():
-    sector_data = {}
 
-    for name, symbol in SECTORS.items():
-        hist = yf.Ticker(symbol).history(period="2d")
-        if len(hist) >= 2:
-            change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[-2]) / hist["Close"].iloc[-2]) * 100
-            sector_data[name] = round(change, 2)
+# -----------------------------
+# Bulk Sector Data Fetch
+# -----------------------------
+def get_all_changes(symbols):
+    try:
+        data = yf.download(
+            tickers=" ".join(symbols),
+            period="2d",
+            group_by="ticker",
+            threads=False
+        )
 
-    green = sum(1 for v in sector_data.values() if v > 0)
-    red = sum(1 for v in sector_data.values() if v <= 0)
+        results = {}
 
-    message = f"📊 Sector Heatmap\n\n{green} Green | {red} Red\n"
+        for symbol in symbols:
+            try:
+                hist = data[symbol]
+                current = hist["Close"].iloc[-1]
+                previous = hist["Close"].iloc[-2]
+                change = ((current - previous) / previous) * 100
+                results[symbol] = round(change, 2)
+            except:
+                results[symbol] = None
 
-    for sector, change in sector_data.items():
-        circle = "🟢" if change > 0 else "🔴"
-        message += f"{circle} {sector}: {change}%\n"
+        return results
 
-    send_message(message)
+    except Exception as e:
+        print("Bulk fetch failed:", e)
+        return None
 
-@app.route("/")
-def home():
-    return "Bot Running!"
 
-@app.route("/run")
-def trigger():
-    run_bot()
-    return "Sector Heatmap Sent!"
-
+# -----------------------------
+# Main Execution
+# -----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+
+    try:
+        now = datetime.now().strftime("%d %b %Y %I:%M %p IST")
+
+        symbols = list(SECTORS.values())
+        changes = get_all_changes(symbols)
+
+        if not changes:
+            send_message("⚠️ Sector data unavailable right now.")
+            exit()
+
+        green = 0
+        red = 0
+        message = f"📊 Sector Heatmap\n🕒 {now}\n\n"
+
+        for name, symbol in SECTORS.items():
+            change = changes.get(symbol)
+
+            if change is None:
+                continue
+
+            if change >= 0:
+                indicator = "🟢"
+                green += 1
+            else:
+                indicator = "🔴"
+                red += 1
+
+            message += f"{indicator} {name}: {change}%\n"
+
+        message += f"\n🟢 Green: {green} | 🔴 Red: {red}"
+
+        # Rotation Signal Logic
+        if red >= 8:
+            message += "\n\n📌 Broad Selloff — Most sectors declining"
+        elif green >= 8:
+            message += "\n\n📌 Broad Rally — Most sectors advancing"
+        else:
+            message += "\n\n📌 Mixed Market — Sector rotation ongoing"
+
+        send_message(message)
+
+    except Exception as e:
+        print("Main Error:", e)
+        send_message("⚠️ Sector Heatmap Bot Error")
