@@ -1,2 +1,5 @@
+requests
+yfinance
+pytz
 flask
 gunicorn
